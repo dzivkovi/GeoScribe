@@ -1,0 +1,29 @@
+{
+  "community_name": "Thompson Orchard",
+  "description": "Thompson Orchard runs west of Royal York, south of Bloor and is bounded west and south by Mimico Creek",
+  "reference_point": {
+    "address": "9 Ashton Manor, Etobicoke, ON"
+  },
+  "boundaries": [
+    {
+      "feature_name": "Royal York Rd",
+      "feature_type": "street",
+      "compass_direction": "east"
+    },
+    {
+      "feature_name": "The Kingsway",
+      "feature_type": "street",
+      "compass_direction": "north",
+      "note": "Bloor St W becomes The Kingsway in this area"
+    },
+    {
+      "feature_name": "Mimico Creek",
+      "feature_type": "waterway",
+      "compass_direction": "west_and_south"
+    }
+  ],
+  "zoning_exception": {
+    "exception_number": 42,
+    "zone_type": "RD"
+  }
+}
