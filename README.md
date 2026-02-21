@@ -1,88 +1,47 @@
 # GeoScribe
 
-Scribe geographic polygons from natural language boundary descriptions.
+Turn plain-English community descriptions into real GIS polygons.
 
-GeoScribe takes structured community boundary descriptions — street names, waterways, compass directions — and constructs real geographic polygons using live GIS data from Toronto's ArcGIS REST API and OpenStreetMap. Outputs include interactive HTML maps (Folium/Leaflet), GeoJSON, and KML.
+> *"Thompson Orchard runs west of Royal York, south of Bloor and is bounded west and south by Mimico Creek"*
 
-**Example input**: *"Thompson Orchard runs west of Royal York, south of Bloor and is bounded west and south by Mimico Creek"*
+GeoScribe takes that sentence, queries Toronto's live ArcGIS and OpenStreetMap APIs, and produces an interactive map, GeoJSON, and KML — no GIS expertise required.
 
-**Example output**: A polygon of ~330 houses overlaid on an interactive OpenStreetMap, exportable to Google Earth.
+## Usage
 
-## Quick Start
-
-**See it first** — open `examples/sample_output/thompson_orchard.html` in a browser to see what GeoScribe produces.
-
-**Run it yourself:**
+### 1. Install and run
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
 
-# Generate the Thompson Orchard community polygon
 cd scripts
 python community_polygon.py ../examples/thompson_orchard.json --approach both
-
-# Open the HTML map in your browser
-# (output path printed to console, in ../output/)
 ```
 
-This fetches live geometry from Toronto's ArcGIS servers, constructs the polygon, and exports three files to `output/`:
-- `.html` — interactive map (open in any browser)
-- `.geojson` — standard GIS format (open at [geojson.io](https://geojson.io))
-- `.kml` — Google Earth format
+Three files appear in `output/`:
 
-## How It Works
+| File | What you get |
+|------|-------------|
+| `thompson_orchard_*.html` | Interactive Leaflet map — open in any browser |
+| `thompson_orchard_*.geojson` | Standard GeoJSON polygon |
+| `thompson_orchard_*.kml` | Google Earth / Google My Maps format |
 
-GeoScribe implements two complementary polygon construction approaches:
+Or skip straight to the pre-generated output: open `examples/sample_output/thompson_orchard.html` in a browser.
 
-### Approach A: Boundary Lines to Polygon
+### 2. Describe your community
 
-1. **Fetch** road/waterway line geometries from Toronto ArcGIS REST API
-2. **Merge** segments with Shapely's `linemerge()` (ArcGIS returns roads as disconnected segments)
-3. **Find corners** where adjacent boundaries meet (geocoding for street intersections, geometric intersection for street/waterway pairs)
-4. **Clip** each boundary line to the relevant segment using linear referencing
-5. **Assemble** clipped segments into a closed ring and create the polygon
-
-Best for communities where you know the boundary streets/waterways but don't have a zoning exception number.
-
-### Approach B: Zoning Exception Union
-
-1. **Query** all parcels with a specific zoning exception number from Toronto's zoning layer
-2. **Convert** ArcGIS ring geometry to Shapely Polygons
-3. **Union** all parcels with `unary_union()` to produce the exact community boundary
-
-Authoritative and precise — produces the official community boundary when a zoning exception number is available.
-
-When both approaches run (`--approach both`), the script overlays both polygons on the same map and computes an Intersection-over-Union score for comparison.
-
-## JSON Input Format
-
-Community boundaries are described in a JSON file:
+Create a JSON file. Use the names people actually say — GeoScribe resolves them to official GIS names automatically:
 
 ```json
 {
   "community_name": "Thompson Orchard",
-  "description": "Thompson Orchard runs west of Royal York, south of Bloor...",
+  "description": "Thompson Orchard runs west of Royal York, south of Bloor ...",
   "reference_point": {
-    "address": "9 Ashton Manor, Etobicoke, ON"
+    "address": "25 Thompson Ave, Etobicoke, ON"
   },
   "boundaries": [
-    {
-      "feature_name": "Royal York Rd",
-      "feature_type": "street",
-      "compass_direction": "east"
-    },
-    {
-      "feature_name": "The Kingsway",
-      "feature_type": "street",
-      "compass_direction": "north",
-      "note": "Bloor St W becomes The Kingsway in this area"
-    },
-    {
-      "feature_name": "Mimico Creek",
-      "feature_type": "waterway",
-      "compass_direction": "west_and_south"
-    }
+    { "feature_name": "Royal York",   "feature_type": "street",   "compass_direction": "east" },
+    { "feature_name": "Bloor",        "feature_type": "street",   "compass_direction": "north" },
+    { "feature_name": "Mimico Creek", "feature_type": "waterway", "compass_direction": "west_and_south" }
   ],
   "zoning_exception": {
     "exception_number": 42,
@@ -93,23 +52,50 @@ Community boundaries are described in a JSON file:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `community_name` | Yes | Display name for the community |
+| `community_name` | Yes | Display name |
 | `description` | No | Human-readable boundary description |
-| `reference_point.address` | Yes* | Address known to be inside the community |
+| `reference_point.address` | Yes* | An address *inside* the community (used for orientation and validation) |
 | `reference_point.lat/lon` | Yes* | Coordinates (alternative to address) |
-| `boundaries[]` | Yes | Array of boundary features in perimeter order |
-| `boundaries[].feature_name` | Yes | Official GIS name (e.g., "Royal York Rd", not "Royal York Road") |
+| `boundaries[]` | Yes | Boundary features in **perimeter order** (each shares a corner with the next) |
+| `boundaries[].feature_name` | Yes | Everyday name — "Bloor", "Royal York", "Mimico Creek". GeoScribe resolves to GIS names. |
 | `boundaries[].feature_type` | Yes | `street`, `waterway`, or `railway` |
-| `boundaries[].compass_direction` | Yes | Which side of the community: `north`, `south`, `east`, `west`, `west_and_south`, etc. |
-| `zoning_exception` | No | Required for Approach B |
+| `boundaries[].compass_direction` | Yes | Where this boundary sits: `north`, `south`, `east`, `west`, `west_and_south`, etc. |
+| `zoning_exception` | No | Enables Approach B (zoning parcel union) |
 
-*One of `address` or `lat/lon` is required.
+*One of `address` or `lat/lon` required.
 
-Boundaries must be listed in **perimeter order** — each entry shares a corner with the next, and the last shares a corner with the first.
+### 3. View the results
 
-## CLI Usage
+**HTML map** — double-click the `.html` file. Pan, zoom, toggle between street and satellite layers.
 
-### Polygon Generation
+**KML** — open in any of these:
+
+| Tool | How to load |
+|------|------------|
+| [Google Earth Web](https://earth.google.com/web) | Menu (top-left) → Projects → New project → Import KML file |
+| [Google My Maps](https://www.google.com/mymaps) | Create a new map → Import → upload the `.kml` |
+| [geojson.io](https://geojson.io) | Drag and drop the `.kml` or `.geojson` onto the map |
+| [QGIS](https://qgis.org) (desktop, free) | Layer → Add Vector Layer → select the file |
+
+Google Earth Web is the most satisfying — you get satellite imagery underneath the polygon and can compare it to the actual neighbourhood.
+
+**GeoJSON** — works with any GIS tool or mapping library (Leaflet, Mapbox, Deck.gl). Paste directly into [geojson.io](https://geojson.io) for instant visualization and editing.
+
+### 4. Validate an address
+
+Check whether a specific address falls within community boundaries:
+
+```bash
+python validate.py "9 Ashton Manor, Etobicoke, ON"
+
+# JSON-only output
+python validate.py --json-only "9 Ashton Manor, Etobicoke, ON"
+
+# Standalone boundary check
+python boundary_check.py "9 Ashton Manor, Etobicoke, ON" --exception 42
+```
+
+### 5. CLI options
 
 ```bash
 # Both approaches (default)
@@ -125,45 +111,32 @@ python community_polygon.py ../examples/thompson_orchard.json --approach zoning
 python community_polygon.py ../examples/thompson_orchard.json --address "123 Other St, Toronto"
 python community_polygon.py ../examples/thompson_orchard.json --lat 43.6388 --lon -79.5108
 
-# Skip HTML map
+# Skip HTML map / custom output dir
 python community_polygon.py ../examples/thompson_orchard.json --no-map
-
-# Custom output directory
 python community_polygon.py ../examples/thompson_orchard.json --output-dir ./my_output
 
 # Use Google geocoding (requires GOOGLE_MAPS_API_KEY env var)
 python community_polygon.py ../examples/thompson_orchard.json --provider google
 ```
 
-### Boundary Validation
+## How It Works
 
-Validate that an address falls within a community's described boundaries:
+GeoScribe builds polygons two independent ways:
 
-```bash
-# Validate the default address (9 Ashton Manor)
-python validate.py
+### Approach A: Boundary Lines → Polygon
 
-# Validate a specific address
-python validate.py "9 Ashton Manor, Etobicoke, ON"
+1. **Resolve names** — maps everyday names to GIS names (e.g., "Bloor" → "The Kingsway") using exact match, fuzzy LIKE query, or intersection-based lookup
+2. **Fetch geometry** — road centrelines and waterways from ArcGIS; falls back to OpenStreetMap for sparse waterway data
+3. **Filter by compass** — keeps only segments consistent with each boundary's direction relative to the community centre
+4. **Find corners** — multi-strategy pipeline: geocode intersection (Google + Nominatim) with geometry snapping validation → geometric intersection → line extrapolation → nearest points fallback
+5. **Clip & assemble** — extracts each boundary between its corners using linear referencing, detects and straightens detour segments, assembles into a closed polygon ring
 
-# JSON-only output
-python validate.py --json-only "9 Ashton Manor, Etobicoke, ON"
+### Approach B: Zoning Exception Union
 
-# Standalone boundary check
-python boundary_check.py "9 Ashton Manor, Etobicoke, ON" --exception 42
-```
+1. **Query** all parcels with a specific zoning exception number from Toronto's zoning layer
+2. **Union** parcels into a single polygon with `unary_union()`
 
-## Output Formats
-
-| Format | Extension | Use Case |
-| --- | --- | --- |
-| HTML Map | `.html` | Interactive visualization — open in any browser, pan/zoom, toggle layers |
-| GeoJSON | `.geojson` | Web standard — import into [geojson.io](https://geojson.io), Mapbox, Leaflet, QGIS |
-| KML | `.kml` | Google Earth — 3D visualization, sharing with non-technical users |
-| Markdown Report | `.md` | Boundary validation results (human-readable) |
-| JSON Report | `.json` | Boundary validation results (machine-readable) |
-
-All outputs are saved to `output/` with timestamps: `thompson_orchard_20260220_143000.html`
+Authoritative when a zoning exception number is available. When `--approach both` is used, both results are overlaid and compared (IoU score).
 
 ## Architecture
 
@@ -171,7 +144,8 @@ All outputs are saved to `output/` with timestamps: `thompson_orchard_20260220_1
 GeoScribe/
 ├── examples/
 │   ├── thompson_orchard.json       Sample boundary description (input)
-│   └── sample_output/              Pre-generated reference outputs
+│   ├── ThompsonOrchard.png         Reference map for validation
+│   └── sample_output/              Pre-generated outputs
 │       ├── thompson_orchard.html
 │       ├── thompson_orchard.geojson
 │       ├── thompson_orchard.kml
@@ -189,61 +163,38 @@ GeoScribe/
 └── output/                          Runtime outputs (gitignored)
 ```
 
-### Dependency Graph
-
-```
-community_polygon.py ──→ toronto_gis.py ──→ config.py
-                     ──→ geocoder.py ────→ config.py
-                     ──→ config.py
-                     ──→ community_visualize.py (optional, for HTML maps)
-
-validate.py ──→ geocoder.py ────→ config.py
-            ──→ toronto_gis.py ──→ config.py
-            ──→ boundary_check.py ──→ geocoder.py, toronto_gis.py, config.py
-            ──→ report_generator.py ──→ config.py
-```
-
 ### Data Sources
 
 | Source | What It Provides | API Key |
 | --- | --- | --- |
-| Toronto ArcGIS REST API | Road centrelines, waterlines, zoning parcels, property boundaries | None required |
-| Overpass API (OpenStreetMap) | Waterway fallback when ArcGIS data is sparse | None required |
-| Nominatim | Free geocoding (address → lat/lon) | None required |
-| Google Maps Geocoding | Optional higher-accuracy geocoding | `GOOGLE_MAPS_API_KEY` env var |
+| Toronto ArcGIS REST API | Road centrelines, waterlines, zoning parcels, property boundaries | None |
+| Overpass API (OpenStreetMap) | Waterway fallback when ArcGIS data is sparse | None |
+| Nominatim | Free geocoding (default) | None |
+| Google Maps Geocoding | Higher-accuracy intersection geocoding | Optional: `GOOGLE_MAPS_API_KEY` env var |
 
 ## Configuration
 
-All configuration is in `scripts/config.py`:
+All endpoints and constants are in `scripts/config.py`. Output goes to `output/` (auto-created, gitignored).
 
-- **`DEFAULT_ADDRESS`** — default address for validation (currently "9 Ashton Manor, Etobicoke, ON, Canada")
-- **`ARCGIS_BASE`** — Toronto ArcGIS REST API base URL
-- **`LAYER_*`** — individual GIS layer endpoints (zoning, roads, waterlines, property boundaries, etc.)
-- **`NOMINATIM_URL`** — OpenStreetMap geocoding endpoint
-- **`OUTPUT_DIR`** — output directory (auto-resolved relative to script location)
-
-### Environment Variables
-
-| Variable | Required | Description |
+| Env Variable | Required | Description |
 | --- | --- | --- |
-| `GOOGLE_MAPS_API_KEY` | No | Google Maps geocoding API key (only if using `--provider google`) |
-
-## Known Limitations
-
-- **Approach A accuracy**: Road centreline data from ArcGIS has 100-200m gaps at intersections. Roads that curve significantly (e.g., through ravines) may produce shifted polygons. Use Approach B when a zoning exception number is available.
-- **Road name aliases**: Toronto road names change locally (e.g., Bloor St W becomes The Kingsway). The JSON input must use the official GIS name. Check the `note` field for documenting aliases.
-- **Sparse waterway data**: ArcGIS waterline layer can be extremely sparse. GeoScribe automatically falls back to the Overpass API (OpenStreetMap) when ArcGIS returns less than 200m of geometry.
-- **Nominatim geocoding**: Returns points on road centrelines, not at intersections. This affects corner detection in Approach A.
-- **Toronto-specific**: Currently configured for Toronto's ArcGIS REST API. Adapting to other cities requires updating the layer endpoints in `config.py` and the road name normalization in `community_polygon.py`.
+| `GOOGLE_MAPS_API_KEY` | No | Improves intersection geocoding accuracy. Nominatim is always used as fallback. |
 
 ## Adding a New Community
 
 1. Create a JSON file in `examples/` following the schema above
-2. Use official GIS road names (check Toronto's open data portal if unsure)
+2. Use everyday road/waterway names — GeoScribe resolves them to GIS names
 3. List boundaries in perimeter order (clockwise or counter-clockwise)
-4. Include a `reference_point` address known to be inside the community
-5. If available, include the `zoning_exception` number for authoritative Approach B
+4. Set `reference_point` to an address known to be *inside* the community
+5. If available, include the `zoning_exception` number for Approach B
 6. Run: `cd scripts && python community_polygon.py ../examples/your_community.json --approach both`
+
+## Known Limitations
+
+- **Toronto-specific**: Currently configured for Toronto's ArcGIS REST API. Adapting to other cities requires updating `config.py` endpoints and road name normalization.
+- **ArcGIS road centreline gaps**: 100-1500m gaps at intersections, especially at bridges/underpasses. The geocode+snap pipeline handles most cases, but complex road geometries (ravines, highway interchanges) may need manual reference point tuning.
+- **Sparse waterway data**: ArcGIS waterline layer can be thin. GeoScribe automatically falls back to OpenStreetMap when ArcGIS returns less than 200m of geometry.
+- **Curving boundary roads**: When a road curves significantly between corners (detour ratio >2.5x), GeoScribe replaces it with a straight line. This is correct for boundaries but loses road-following detail.
 
 ## Dependencies
 
