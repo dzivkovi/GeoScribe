@@ -29,7 +29,13 @@ Or skip straight to the pre-generated output: open `examples/sample_output/thomp
 
 ### 2. Describe your community
 
-Create a JSON file. Use the names people actually say — GeoScribe resolves them to official GIS names automatically:
+You start with plain English — a sentence like the one at the top of this page. GeoScribe needs that description converted into a structured JSON file before it can query the GIS APIs.
+
+**Option A: Use the intake prompt (recommended).** Paste the prompt from [`prompts/boundary_intake.md`](prompts/boundary_intake.md) into any LLM (Claude, ChatGPT, etc.), followed by your plain-English description. The LLM will either produce the JSON directly or ask you clarifying questions about missing boundaries, directions, or reference points.
+
+**Option B: Write the JSON by hand.** Follow the schema below. Use the names people actually say — GeoScribe resolves them to official GIS names automatically.
+
+Either way, save the result as a `.json` file in `examples/`.
 
 ```json
 {
@@ -53,16 +59,32 @@ Create a JSON file. Use the names people actually say — GeoScribe resolves the
 | Field | Required | Description |
 | --- | --- | --- |
 | `community_name` | Yes | Display name |
-| `description` | No | Human-readable boundary description |
-| `reference_point.address` | Yes* | An address *inside* the community (used for orientation and validation) |
+| `description` | No | Original plain-English boundary description (display only — not parsed by GeoScribe) |
+| `reference_point.address` | Yes* | An address *inside* the community (not on a boundary street) |
 | `reference_point.lat/lon` | Yes* | Coordinates (alternative to address) |
 | `boundaries[]` | Yes | Boundary features in **perimeter order** (each shares a corner with the next) |
 | `boundaries[].feature_name` | Yes | Everyday name — "Bloor", "Royal York", "Mimico Creek". GeoScribe resolves to GIS names. |
 | `boundaries[].feature_type` | Yes | `street`, `waterway`, or `railway` |
-| `boundaries[].compass_direction` | Yes | Where this boundary sits: `north`, `south`, `east`, `west`, `west_and_south`, etc. |
+| `boundaries[].compass_direction` | Yes | Which side of the community this boundary sits on (see pitfalls below) |
 | `zoning_exception` | No | Enables Approach B (zoning parcel union) |
 
 *One of `address` or `lat/lon` required.
+
+#### Common pitfalls
+
+**The compass direction flip.** This is the #1 mistake. When a description says "west of Royal York," that means Royal York is the **east** boundary — the community sits to its west, so Royal York is on the east edge. Always ask: "which side of the community is this feature on?" not "which direction does the description say?"
+
+| Description says | compass_direction should be |
+| --- | --- |
+| "west of Royal York" | `east` (Royal York is on the east side) |
+| "south of Bloor" | `north` (Bloor is on the north side) |
+| "north of the lake" | `south` (the lake is on the south side) |
+
+**Don't split wrapping features.** If a creek forms both the west and south boundary, that's ONE entry with `"west_and_south"` — not two separate entries. Splitting it creates a phantom corner where the creek meets itself.
+
+**Use the names people say, not GIS names.** Write "Bloor" not "Bloor St W". Write "Royal York" not "Royal York Rd". GeoScribe has a name resolution pipeline that maps colloquial names to the exact GIS field values. Using official abbreviations can actually cause worse results because they bypass the resolution logic.
+
+**Reference point must be interior.** An address on a boundary street confuses the compass filtering. Pick a house on a residential street clearly inside the community.
 
 ### 3. View the results
 
@@ -203,12 +225,24 @@ All endpoints and constants are in `scripts/config.py`. Output goes to `output/`
 
 ## Adding a New Community
 
-1. Create a JSON file in `examples/` following the schema above
-2. Use everyday road/waterway names — GeoScribe resolves them to GIS names
-3. List boundaries in perimeter order (clockwise or counter-clockwise)
-4. Set `reference_point` to an address known to be *inside* the community
-5. If available, include the `zoning_exception` number for Approach B
-6. Run: `cd scripts && python community_polygon.py ../examples/your_community.json --approach both`
+The starting point is always a plain-English description of the community's boundaries — the kind of sentence a resident would say. GeoScribe itself does not parse natural language; it needs structured JSON. The conversion happens in a separate step, either by you or by an LLM.
+
+**Step 1: Write down the boundaries in plain English.**
+Something like: *"Lakeview Village is bounded by Lakeshore on the north, Etobicoke Creek on the west, Lake Ontario on the south, and Dwight Avenue on the east."*
+
+**Step 2: Convert to JSON.**
+Paste the [intake prompt](prompts/boundary_intake.md) into any LLM (Claude, ChatGPT, etc.), followed by your description. The LLM produces the JSON or asks clarifying questions. Alternatively, write the JSON by hand following the schema in section 2 above.
+
+Review the output for the pitfalls in section 2 — especially the compass direction flip ("west of X" means X is the east boundary) and wrapping features (one entry with a compound direction, not two entries).
+
+**Step 3: Run GeoScribe.**
+
+```bash
+cd scripts && python community_polygon.py ../examples/your_community.json --approach both
+```
+
+**Step 4: Review and iterate.**
+Open the HTML map. If a boundary looks wrong, check: is the compass direction correct? Is the reference point inside the polygon? Are boundaries in perimeter order? Adjust the JSON and re-run.
 
 ## Known Limitations
 
