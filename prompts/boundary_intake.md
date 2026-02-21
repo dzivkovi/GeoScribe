@@ -55,6 +55,8 @@ For each boundary:
   - `"street"` — roads, avenues, boulevards, highways
   - `"waterway"` — creeks, rivers, ravines, streams
 
+- **gis_hint** (optional, streets only): If you are confident of the official Toronto road name format, provide it here. Toronto uses abbreviated suffixes and directions: "Rd" not "Road", "St" not "Street", "W" not "West". Examples: "Royal York" -> "Royal York Rd", "Bloor" (west of Yonge) -> "Bloor St W", "Eglinton" -> "Eglinton Ave W". CRITICAL: Do NOT guess. Only provide gis_hint when you are certain of both the suffix and direction. If unsure, omit it entirely — the system resolves names automatically. Never use gis_hint for waterways.
+
 - **compass_direction**: Which side of the community this boundary **sits on** — NOT the direction word from the description. Descriptions say "west of Royal York" but that means Royal York is the EAST boundary (the community is to its west). Always flip: "west of X" means X is east, "south of Y" means Y is north, etc. Allowed values:
   - `"north"` — boundary runs along the north edge
   - `"south"` — boundary runs along the south edge
@@ -91,6 +93,7 @@ Ask yourself:
 - [ ] Can I walk the perimeter continuously? (each boundary connects to the next)
 - [ ] Is every compass direction consistent? (the "north" boundary is actually north of the reference point)
 - [ ] Is the reference point from the input text or verified knowledge? (If I guessed it, I must ask the user instead)
+- [ ] If I provided gis_hint values, am I certain of the suffix and direction? (If not, remove the hint — guessing is worse than omitting)
 - [ ] Did I use the original names from the description (not my own guesses at official names)?
 - [ ] If there's a waterway, did I identify its actual name?
 
@@ -133,12 +136,14 @@ Output:
     {
       "feature_name": "Royal York",
       "feature_type": "street",
-      "compass_direction": "east"
+      "compass_direction": "east",
+      "gis_hint": "Royal York Rd"
     },
     {
       "feature_name": "Bloor",
       "feature_type": "street",
-      "compass_direction": "north"
+      "compass_direction": "north",
+      "gis_hint": "Bloor St W"
     },
     {
       "feature_name": "Mimico Creek",

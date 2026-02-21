@@ -8,12 +8,14 @@
     {
       "feature_name": "Royal York",
       "feature_type": "street",
-      "compass_direction": "east"
+      "compass_direction": "east",
+      "gis_hint": "Royal York Rd"
     },
     {
       "feature_name": "Bloor",
       "feature_type": "street",
-      "compass_direction": "north"
+      "compass_direction": "north",
+      "gis_hint": "Bloor St W"
     },
     {
       "feature_name": "Mimico Creek",

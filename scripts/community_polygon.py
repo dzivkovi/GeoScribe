@@ -46,21 +46,8 @@ ROAD_DIRECTION_MAP = {
     "West": "W", "East": "E", "North": "N", "South": "S",
 }
 
-ROAD_NAME_ALIASES = {
-    "Royal York Road": "Royal York Rd",
-    "Royal York": "Royal York Rd",
-    "Bloor Street West": "Bloor St W",
-    "Bloor Street": "Bloor St W",
-    "Bloor": "Bloor St W",
-    "The Kingsway": "The Kingsway",
-    "Kingsway": "The Kingsway",
-}
-
-
 def normalize_road_name(name):
     """Normalize a road name to match Toronto ArcGIS LINEAR_NAME_FULL format."""
-    if name in ROAD_NAME_ALIASES:
-        return ROAD_NAME_ALIASES[name]
     words = name.split()
     normalized = []
     for word in words:
@@ -980,7 +967,10 @@ def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon):
 
     # Store original user-facing names — these geocode better than GIS names
     for b in resolved:
-        b["_original_name"] = normalize_road_name(b["feature_name"]) if b["feature_type"] == "street" else b["feature_name"]
+        if b["feature_type"] == "street":
+            b["_original_name"] = b.get("gis_hint") or normalize_road_name(b["feature_name"])
+        else:
+            b["_original_name"] = b["feature_name"]
 
     print("  Resolving boundary names...")
 
@@ -991,7 +981,7 @@ def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon):
         compass = b.get("compass_direction")
 
         if ftype == "street":
-            normalized = normalize_road_name(fname)
+            normalized = b.get("gis_hint") or normalize_road_name(fname)
             field = "LINEAR_NAME_FULL"
             layer = LAYER_ROAD_CENTRELINE
         elif ftype == "waterway":
@@ -1045,7 +1035,7 @@ def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon):
             continue
 
         b = resolved[i]
-        approx = normalize_road_name(b["feature_name"])
+        approx = b.get("gis_hint") or normalize_road_name(b["feature_name"])
         compass = b.get("compass_direction")
 
         print(f"    '{b['feature_name']}' not found in GIS. "

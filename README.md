@@ -45,8 +45,8 @@ Either way, save the result as a `.json` file in `examples/`.
     "address": "25 Thompson Ave, Etobicoke, ON"
   },
   "boundaries": [
-    { "feature_name": "Royal York",   "feature_type": "street",   "compass_direction": "east" },
-    { "feature_name": "Bloor",        "feature_type": "street",   "compass_direction": "north" },
+    { "feature_name": "Royal York",   "feature_type": "street",   "compass_direction": "east",  "gis_hint": "Royal York Rd" },
+    { "feature_name": "Bloor",        "feature_type": "street",   "compass_direction": "north", "gis_hint": "Bloor St W" },
     { "feature_name": "Mimico Creek", "feature_type": "waterway", "compass_direction": "west_and_south" }
   ],
   "zoning_exception": {
@@ -66,6 +66,7 @@ Either way, save the result as a `.json` file in `examples/`.
 | `boundaries[].feature_name` | Yes | Everyday name — "Bloor", "Royal York", "Mimico Creek". GeoScribe resolves to GIS names. |
 | `boundaries[].feature_type` | Yes | `street`, `waterway`, or `railway` |
 | `boundaries[].compass_direction` | Yes | Which side of the community this boundary sits on (see pitfalls below) |
+| `boundaries[].gis_hint` | No | Official Toronto GIS road name (e.g., "Royal York Rd"). Speeds up name resolution. |
 | `zoning_exception` | No | Enables Approach B (zoning parcel union) |
 
 *One of `address` or `lat/lon` required.
