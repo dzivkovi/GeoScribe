@@ -39,7 +39,7 @@ The name of the community exactly as described.
 The original plain-English description, copied verbatim.
 
 ### reference_point (required)
-A real street address that is clearly INSIDE the community — not on the boundary itself. If the description mentions a landmark, school, or park inside the community, use that address. If not, pick a residential address from the interior. You must be confident this address exists.
+A real street address that is clearly INSIDE the community — not on the boundary itself. If the description mentions a landmark, school, or park inside the community, use that address. CRITICAL: If the input text does not contain an address and you are not certain a specific address exists inside this community, you MUST NOT invent or guess one. Instead, trigger the "If Information Is Missing" protocol and ask the user to provide a reference address.
 
 ### boundaries (required, array, minimum 2)
 Listed in PERIMETER ORDER going around the community. Each boundary must share a corner with the next one, and the last boundary must share a corner with the first. Think of it as walking the perimeter.
@@ -67,7 +67,7 @@ For each boundary:
 
 ### zoning_exception (optional)
 Only include if the description mentions a specific Toronto zoning bylaw exception number. Contains:
-- **exception_number**: The integer exception number
+- **exception_number**: The integer exception number. Extract just the number — if the text says "x42" or "(x42)" or "exception 42", output `42`.
 - **zone_type**: The zoning category code (e.g., "RD" for Residential Detached, "RM" for Residential Multiple, "CR" for Commercial Residential)
 
 ## Critical Rules
@@ -90,7 +90,7 @@ Ask yourself:
 - [ ] Did I flip the compass directions? ("west of X" means X is the east boundary, not west)
 - [ ] Can I walk the perimeter continuously? (each boundary connects to the next)
 - [ ] Is every compass direction consistent? (the "north" boundary is actually north of the reference point)
-- [ ] Does the reference point address actually exist inside this area?
+- [ ] Is the reference point from the input text or verified knowledge? (If I guessed it, I must ask the user instead)
 - [ ] Did I use the original names from the description (not my own guesses at official names)?
 - [ ] If there's a waterway, did I identify its actual name?
 
@@ -147,6 +147,12 @@ Output:
     }
   ]
 }
+
+## Output Constraint
+
+When you have all the information needed, output ONLY the valid JSON block inside ```json markers. No introductory text, no commentary, no explanation after the JSON. The user needs to copy-paste this directly into a .json file.
+
+When you are missing information and need to ask clarifying questions, output ONLY the questions — no partial JSON.
 
 Now process the following community description:
 ```
