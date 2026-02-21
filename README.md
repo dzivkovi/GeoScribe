@@ -97,14 +97,22 @@ python boundary_check.py "9 Ashton Manor, Etobicoke, ON" --exception 42
 
 ### 5. CLI options
 
+**Which `--approach` should I use?**
+
+| Flag | When to use it | What happens |
+|------|---------------|--------------|
+| *(no flag)* | **Most of the time.** Your JSON has both boundaries and a `zoning_exception`. | Runs both approaches, overlays them, shows an IoU agreement score. This is the default. |
+| `--approach lines` | Your JSON has **no** `zoning_exception`, OR you're iterating on boundary accuracy. | Traces road/waterway geometry only. This is what most communities will use (not every area has a unique zoning exception). |
+| `--approach zoning` | You **only** want the zoning parcel union and don't care about road-tracing. | Faster — skips all geometry work. Only works if your JSON has a `zoning_exception`. |
+
 ```bash
-# Both approaches (default)
+# Both approaches (default — recommended when zoning_exception is available)
 python community_polygon.py ../examples/thompson_orchard.json
 
-# Only boundary lines approach
+# Only boundary lines (use when no zoning exception exists)
 python community_polygon.py ../examples/thompson_orchard.json --approach lines
 
-# Only zoning exception approach
+# Only zoning exception (fast, authoritative when available)
 python community_polygon.py ../examples/thompson_orchard.json --approach zoning
 
 # Override reference point
@@ -137,6 +145,19 @@ GeoScribe builds polygons two independent ways:
 2. **Union** parcels into a single polygon with `unary_union()`
 
 Authoritative when a zoning exception number is available. When `--approach both` is used, both results are overlaid and compared (IoU score).
+
+## Zoning: What the Exception Number Means
+
+Toronto properties have a zoning label like `RD (f13.5; a510; d0.45) (x42)`. The letters and numbers encode what you can build: zone type (RD = detached houses only), minimum lot size, and maximum house size. The `(x42)` at the end is the important part — it means **site-specific exception rules** override the defaults for this property.
+
+GeoScribe uses these exception numbers in two ways:
+
+- **Drawing community boundaries (Approach B):** All ~330 homes in Thompson Orchard share exception x42. GeoScribe queries the city's database for every property with x42, then merges them into one polygon. This is authoritative — it uses the city's own parcel data.
+- **Validating addresses:** `validate.py` automatically retrieves the zoning label, exception number, and boundary checks for any Toronto address.
+
+**Where to find your community's exception number:** Search the property on the [Toronto Interactive Zoning Map](https://map.toronto.ca/maps/map.jsp?app=ZBL_CONSULT), click it, and look for `(x__)` in the zoning label. If all homes in the area share the same exception, that's your input for the `zoning_exception` field.
+
+For a full explanation of Toronto zoning (FSI, setbacks, GFA, how to read the by-law, and why exceptions change everything), see [docs/toronto-zoning.md](docs/toronto-zoning.md).
 
 ## Architecture
 
@@ -194,7 +215,7 @@ All endpoints and constants are in `scripts/config.py`. Output goes to `output/`
 - **Toronto-specific**: Currently configured for Toronto's ArcGIS REST API. Adapting to other cities requires updating `config.py` endpoints and road name normalization.
 - **ArcGIS road centreline gaps**: 100-1500m gaps at intersections, especially at bridges/underpasses. The geocode+snap pipeline handles most cases, but complex road geometries (ravines, highway interchanges) may need manual reference point tuning.
 - **Sparse waterway data**: ArcGIS waterline layer can be thin. GeoScribe automatically falls back to OpenStreetMap when ArcGIS returns less than 200m of geometry.
-- **Curving boundary roads**: When a road curves significantly between corners (detour ratio >2.5x), GeoScribe replaces it with a straight line. This is correct for boundaries but loses road-following detail.
+- **Curving boundary roads**: When a road curves significantly between corners (detour ratio >2.5x), GeoScribe tries to fetch the actual road geometry from OpenStreetMap within a corridor between the corners. This usually produces a road-following edge. Falls back to a straight line only when no suitable road geometry is found.
 
 ## Dependencies
 

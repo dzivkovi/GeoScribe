@@ -417,6 +417,81 @@ out geom;"""
     raise last_error or ValueError("All Overpass endpoints failed")
 
 
+def fetch_corridor_road_osm(corridor_poly, ref_lat, ref_lon):
+    """
+    Fetch the boundary road within a corridor polygon (name-free).
+
+    Queries OSM for ALL highway geometry in the corridor's bounding box,
+    groups segments by road name, and picks the road that spans the longest
+    distance within the corridor (boundary roads run the full length; cross-
+    streets only cross briefly). Among similarly-long roads (>50% of max
+    span), picks the one closest to the reference point — this naturally
+    selects the community-side lane of a dual-carriageway.
+    """
+    import requests
+    import time
+
+    bounds = corridor_poly.bounds  # (minx, miny, maxx, maxy)
+    bbox = f"{bounds[1]},{bounds[0]},{bounds[3]},{bounds[2]}"
+    query = f"""[out:json][timeout:30];
+way["highway"~"primary|secondary|tertiary|residential|trunk"]({bbox});
+out geom;"""
+
+    ref = Point(ref_lon, ref_lat)
+    last_error = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            resp = requests.get(endpoint, params={"data": query}, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Group segments by road name, merge each road's segments
+            roads = {}  # name -> list of LineStrings
+            for element in data.get("elements", []):
+                if element.get("type") == "way" and "geometry" in element:
+                    coords = [(pt["lon"], pt["lat"]) for pt in element["geometry"]]
+                    name = element.get("tags", {}).get("name", f"unnamed_{element['id']}")
+                    if len(coords) >= 2:
+                        roads.setdefault(name, []).append(LineString(coords))
+
+            candidates = []
+            for name, segments in roads.items():
+                merged = linemerge(MultiLineString(segments)) if len(segments) > 1 else segments[0]
+                clipped = merged.intersection(corridor_poly)
+                if not clipped.is_empty and clipped.length > 0:
+                    span = clipped.length * 111320
+                    dist = clipped.distance(ref) * 111320
+                    candidates.append((clipped, span, dist, name))
+
+            if not candidates:
+                return None
+
+            # Pick the road that spans the longest distance in the corridor.
+            # Among similarly-long roads (>50% of max), pick closest to ref.
+            max_span = max(c[1] for c in candidates)
+            long_roads = [c for c in candidates if c[1] > max_span * 0.5]
+            best = min(long_roads, key=lambda x: x[2])
+            print(f"    OSM corridor: picked '{best[3]}' "
+                  f"(span={best[1]:.0f}m, dist={best[2]:.0f}m)")
+            result = best[0]
+            if result.geom_type == "MultiLineString":
+                result = linemerge(result)
+            # If still MultiLineString (disconnected segments), pick longest piece
+            if result.geom_type == "MultiLineString":
+                pieces = list(result.geoms)
+                result = max(pieces, key=lambda g: g.length)
+            return result if result.geom_type == "LineString" else None
+
+        except Exception as e:
+            last_error = e
+            print(f"    Overpass endpoint {endpoint.split('/')[2]} failed: {e}")
+            time.sleep(2)
+
+    if last_error:
+        print(f"    OSM corridor road fetch failed: {last_error}")
+    return None
+
+
 SPARSE_THRESHOLD_M = 200  # boundaries shorter than this trigger Overpass fallback
 
 
@@ -475,6 +550,28 @@ def _line_substring(line, start_dist, end_dist, num_points=200):
     points = [line.interpolate(d) for d in distances]
     coords = [(p.x, p.y) for p in points]
     return LineString(coords)
+
+
+def _apply_corridor_clip(clipped, prev_corner, next_corner, boundary,
+                         ring_segments, source="ArcGIS"):
+    """Apply corridor-clipped geometry as a boundary segment.
+    Returns True if successfully applied, False otherwise."""
+    if clipped.geom_type == "MultiLineString":
+        clipped = linemerge(clipped)
+    if clipped.geom_type != "LineString":
+        return False
+    # Orient from prev_corner to next_corner
+    if (Point(clipped.coords[0]).distance(next_corner)
+            < Point(clipped.coords[0]).distance(prev_corner)):
+        clipped = LineString(list(reversed(clipped.coords)))
+    cc = list(clipped.coords)
+    cc[0] = (prev_corner.x, prev_corner.y)
+    cc[-1] = (next_corner.x, next_corner.y)
+    segment = LineString(cc)
+    ring_segments.append(segment)
+    print(f"    {boundary['feature_name']}: corridor-clipped from {source} "
+          f"({len(cc)} pts, ~{segment.length * 111320:.0f}m)")
+    return True
 
 
 def _merge_and_select(linestrings, clip_box=None, compass_direction=None,
@@ -1173,25 +1270,49 @@ def construct_from_boundaries(description, ref_lat, ref_lon):
         segment = LineString(coords)
 
         # Detour detection: if a road boundary curves far away from the
-        # straight line between corners (>3x the direct distance), the
-        # road geometry goes through a valley/overpass and doesn't represent
-        # the community boundary well. Use a straight line instead.
+        # straight line between corners (>2.5x the direct distance), try
+        # corridor clipping. First try ArcGIS geometry, then fetch the
+        # closest road from OSM within the corridor (name-free).
         seg_len = segment.length * 111320
         straight_len = prev_corner.distance(next_corner) * 111320
         if (straight_len > 0 and seg_len > straight_len * 2.5
                 and boundaries[i]["feature_type"] == "street"):
-            segment = LineString([
+            straight = LineString([
                 (prev_corner.x, prev_corner.y),
                 (next_corner.x, next_corner.y),
             ])
+            corridor = straight.buffer(0.002)  # ~220m at Toronto latitude
+            used_corridor = False
+
+            # Try corridor clip on ArcGIS geometry first
+            clipped = line.intersection(corridor)
+            if not clipped.is_empty and clipped.length * 111320 > straight_len * 0.5:
+                used_corridor = _apply_corridor_clip(
+                    clipped, prev_corner, next_corner, boundaries[i], ring_segments)
+
+            # If ArcGIS geometry doesn't pass through corridor, fetch the
+            # closest road from OSM within the corridor (name-free query)
+            if not used_corridor:
+                try:
+                    osm_road = fetch_corridor_road_osm(corridor, ref_lat, ref_lon)
+                    if osm_road is not None:
+                        used_corridor = _apply_corridor_clip(
+                            osm_road, prev_corner, next_corner,
+                            boundaries[i], ring_segments, source="OSM")
+                except Exception as e:
+                    print(f"    OSM corridor fallback failed: {e}")
+
+            if used_corridor:
+                continue
+            # Corridor clip failed — use straight line
+            segment = straight
+            ring_segments.append(segment)
             print(f"    {boundaries[i]['feature_name']}: straight line "
                   f"(road detours: {seg_len:.0f}m vs {straight_len:.0f}m direct)")
-        else:
-            ring_segments.append(segment)
-            print(f"    {boundaries[i]['feature_name']}: {len(coords)} pts, ~{seg_len:.0f}m")
             continue
 
         ring_segments.append(segment)
+        print(f"    {boundaries[i]['feature_name']}: {len(coords)} pts, ~{seg_len:.0f}m")
 
     if not ring_segments:
         raise ValueError("No ring segments could be constructed")
