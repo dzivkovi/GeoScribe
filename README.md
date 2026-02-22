@@ -4,9 +4,15 @@ Turn plain-English community descriptions into real GIS polygons.
 
 > *"Thompson Orchard runs west of Royal York, south of Bloor and is bounded west and south by Mimico Creek"*
 
-GeoScribe takes that sentence, queries live GIS APIs, and produces an interactive map, GeoJSON, and KML — no GIS expertise required.
+GeoScribe takes that sentence, queries live GIS APIs, and produces an interactive map, GeoJSON, and KML -- no GIS expertise required. Add a zoning exception number and it will also union the city's own parcel data into an authoritative polygon.
 
-**Works in Toronto and beyond.** Toronto communities use the city's ArcGIS REST API for high-precision road centrelines and zoning data. Communities outside Toronto (anywhere with OpenStreetMap coverage) use the Overpass API for road and waterway geometry.
+![Thompson Orchard -- boundary polygon overlaid on OpenStreetMap](images/thompson_orchard_map.png)
+
+**Works outside Toronto too.** Communities anywhere with OpenStreetMap coverage use the Overpass API instead of ArcGIS.
+
+> *"North Richvale is bounded by Major MacKenzie Dr on the north, Yonge St on the east, Carrville Rd on the south, and Bathurst St on the west"*
+
+![North Richvale, Richmond Hill -- 6 km² polygon from OpenStreetMap](images/north_richvale_map.png)
 
 ## Usage
 
@@ -295,3 +301,9 @@ Open the HTML map. If a boundary looks wrong, check: is the compass direction co
 - **simplekml** — KML export for Google Earth
 
 No heavy GIS installations required (no GDAL, no PostGIS, no desktop GIS software).
+
+## License
+
+[MIT](LICENSE) -- free to use, modify, and distribute. Just keep the copyright notice.
+
+Built by [MAGMA INC.](https://magmainc.ca)
