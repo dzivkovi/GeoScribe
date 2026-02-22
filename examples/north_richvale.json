@@ -1,0 +1,33 @@
+{
+  "community_name": "North Richvale",
+  "description": "Community: North Richvale, Richmond Hill\nNorth boundary: Major MacKenzie Dr W\nEast boundary: Yonge St\nSouth boundary: Carrville Rd\nWest boundary: Bathurst St\nReference address: 2 Houseman Cres",
+  "reference_point": {
+    "address": "2 Houseman Cres, Richmond Hill, ON"
+  },
+  "boundaries": [
+    {
+      "feature_name": "Major MacKenzie",
+      "feature_type": "street",
+      "compass_direction": "north",
+      "gis_hint": "Major MacKenzie Dr W"
+    },
+    {
+      "feature_name": "Yonge",
+      "feature_type": "street",
+      "compass_direction": "east",
+      "gis_hint": "Yonge St"
+    },
+    {
+      "feature_name": "Carrville",
+      "feature_type": "street",
+      "compass_direction": "south",
+      "gis_hint": "Carrville Rd"
+    },
+    {
+      "feature_name": "Bathurst",
+      "feature_type": "street",
+      "compass_direction": "west",
+      "gis_hint": "Bathurst St"
+    }
+  ]
+}

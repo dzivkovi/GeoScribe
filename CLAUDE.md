@@ -47,7 +47,7 @@ There are no tests, linter, or build steps configured.
 ### Key Data Sources and Fallbacks
 
 - Toronto ArcGIS REST API: roads, waterways, zoning parcels, property boundaries (no API key)
-- Overpass API (OpenStreetMap): waterway fallback when ArcGIS data is sparse (<200m total geometry)
+- Overpass API (OpenStreetMap): road and waterway fallback when ArcGIS has no data or is sparse (<200m total geometry). Enables polygon generation for communities outside Toronto. **Throttling:** The public endpoint (`overpass-api.de`) rate-limits by IP -- each request occupies a "slot" for its execution time plus a dynamic cooldown that grows with server load. Requests wait up to 15 seconds for a slot, then return HTTP 429. The pipeline uses two endpoints for failover. When running multiple communities back-to-back, wait 15-30 seconds between runs to avoid 429 errors.
 - Nominatim: free geocoding (default); Google Maps geocoding optional via `GOOGLE_MAPS_API_KEY` env var (improves intersection geocoding accuracy)
 
 ### Critical Implementation Details

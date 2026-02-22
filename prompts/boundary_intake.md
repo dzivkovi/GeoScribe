@@ -46,16 +46,22 @@ Listed in PERIMETER ORDER going around the community. Each boundary must share a
 
 For each boundary:
 
-- **feature_name**: Use the common/colloquial name from the description. Do NOT try to guess the official GIS name. Examples:
-  - Description says "Bloor" → use "Bloor" (not "Bloor St W" or "The Kingsway")
-  - Description says "Royal York Road" → use "Royal York Road" (not "Royal York Rd")
-  - Description says "the creek" when context makes clear it's Mimico Creek → use "Mimico Creek"
+- **feature_name**: The name people commonly say when referring to this road or waterway. Drop official suffixes and compass directions that people don't normally say, but keep words that are part of the colloquial name. The system uses this name to geocode intersections, so it must match how people talk about the road. Examples:
+  - Input says "Bloor Street West" → use "Bloor" (people say "Bloor", not "Bloor Street West")
+  - Input says "Major MacKenzie Dr W" → use "Major MacKenzie" (people say "Major MacKenzie")
+  - Input says "Royal York Road" → use "Royal York" (people say "Royal York")
+  - Input says "Yonge St" → use "Yonge" (people say "Yonge")
+  - Input says "16th Avenue" → use "16th Avenue" (people say "16th Avenue", not just "16th" — the "Avenue" distinguishes it from other 16th streets)
+  - Input says "Bayview Ave" → use "Bayview Avenue" (people say "Bayview Avenue" — keep "Avenue" for roads where it's part of the common name)
+  - Input says "Highway 7" → use "Highway 7" (keep "Highway" — it's how people say it)
+  - Input says "the creek" when context makes clear it's Mimico Creek → use "Mimico Creek"
+  - When in doubt, keep the word. Over-stripping (e.g., "Bayview" instead of "Bayview Avenue") causes worse geocoding results than keeping an extra word.
 
 - **feature_type**: One of:
   - `"street"` — roads, avenues, boulevards, highways
   - `"waterway"` — creeks, rivers, ravines, streams
 
-- **gis_hint** (optional, streets only): If you are confident of the official Toronto road name format, provide it here. Toronto uses abbreviated suffixes and directions: "Rd" not "Road", "St" not "Street", "W" not "West". Examples: "Royal York" -> "Royal York Rd", "Bloor" (west of Yonge) -> "Bloor St W", "Eglinton" -> "Eglinton Ave W". CRITICAL: Do NOT guess. Only provide gis_hint when you are certain of both the suffix and direction. If unsure, omit it entirely — the system resolves names automatically. Never use gis_hint for waterways.
+- **gis_hint** (optional, streets only): The full official road name WITH suffix and direction, in abbreviated form ("Rd" not "Road", "St" not "Street", "W" not "West"). Provide this when feature_name differs from the official name. Examples: feature_name "Royal York" → gis_hint "Royal York Rd", feature_name "Bloor" → gis_hint "Bloor St W", feature_name "Major MacKenzie" → gis_hint "Major MacKenzie Dr W", feature_name "16th Avenue" → gis_hint "16th Ave". CRITICAL: Do NOT guess the suffix or direction. If unsure, omit gis_hint entirely — the system resolves names automatically. Never use gis_hint for waterways.
 
 - **compass_direction**: Which side of the community this boundary **sits on** — NOT the direction word from the description. Descriptions say "west of Royal York" but that means Royal York is the EAST boundary (the community is to its west). Always flip: "west of X" means X is east, "south of Y" means Y is north, etc. Allowed values:
   - `"north"` — boundary runs along the north edge
@@ -94,7 +100,7 @@ Ask yourself:
 - [ ] Is every compass direction consistent? (the "north" boundary is actually north of the reference point)
 - [ ] Is the reference point from the input text or verified knowledge? (If I guessed it, I must ask the user instead)
 - [ ] If I provided gis_hint values, am I certain of the suffix and direction? (If not, remove the hint — guessing is worse than omitting)
-- [ ] Did I use the original names from the description (not my own guesses at official names)?
+- [ ] Are my feature_names the colloquial names people say? (Not over-stripped: "Bayview Avenue" not "Bayview". Not official: "Major MacKenzie" not "Major MacKenzie Dr W")
 - [ ] If there's a waterway, did I identify its actual name?
 
 ## If Information Is Missing
@@ -108,6 +114,8 @@ If the description is ambiguous or incomplete, ask the user these specific quest
 3. **Unknown waterway name**: "You mentioned a creek/ravine on the [direction] side. What is the name of this waterway?"
 
 4. **No reference point**: "I need an address that's inside the community (not on the boundary). Can you provide a street address, school, park, or landmark that's clearly within [community name]?"
+
+   **Tip for realtors:** If you're investigating a specific property (e.g., a listing address), that address works as the reference point — as long as you're confident it's inside the community, not on a boundary street.
 
 5. **Unclear perimeter order**: "I have [N] boundaries but I'm not sure how they connect. Starting from [boundary A] going clockwise, what comes next?"
 
@@ -149,6 +157,56 @@ Output:
       "feature_name": "Mimico Creek",
       "feature_type": "waterway",
       "compass_direction": "west_and_south"
+    }
+  ]
+}
+
+## Example 2
+
+Input: "Community: North Richvale, Richmond Hill
+North boundary: Major MacKenzie Dr W
+East boundary: Yonge St
+South boundary: Rutherford Rd
+West boundary: Bathurst St
+Reference address: 2 Houseman Cres"
+
+Analysis:
+- Compass directions are given explicitly — no flip needed
+- Use colloquial names: "Major MacKenzie" (people drop "Dr W"), "Yonge" (people drop "St"), but "Rutherford Road" and "Bathurst Street" — check what people say locally
+- Put official abbreviated names in gis_hint
+- Reference address provided by user — use as-is with city appended
+
+Output:
+{
+  "community_name": "North Richvale",
+  "description": "Community: North Richvale, Richmond Hill\nNorth boundary: Major MacKenzie Dr W\nEast boundary: Yonge St\nSouth boundary: Rutherford Rd\nWest boundary: Bathurst St\nReference address: 2 Houseman Cres",
+  "reference_point": {
+    "address": "2 Houseman Cres, Richmond Hill, ON"
+  },
+  "boundaries": [
+    {
+      "feature_name": "Major MacKenzie",
+      "feature_type": "street",
+      "compass_direction": "north",
+      "gis_hint": "Major MacKenzie Dr W"
+    },
+    {
+      "feature_name": "Yonge",
+      "feature_type": "street",
+      "compass_direction": "east",
+      "gis_hint": "Yonge St"
+    },
+    {
+      "feature_name": "Rutherford",
+      "feature_type": "street",
+      "compass_direction": "south",
+      "gis_hint": "Rutherford Rd"
+    },
+    {
+      "feature_name": "Bathurst",
+      "feature_type": "street",
+      "compass_direction": "west",
+      "gis_hint": "Bathurst St"
     }
   ]
 }

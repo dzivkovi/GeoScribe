@@ -4,7 +4,9 @@ Turn plain-English community descriptions into real GIS polygons.
 
 > *"Thompson Orchard runs west of Royal York, south of Bloor and is bounded west and south by Mimico Creek"*
 
-GeoScribe takes that sentence, queries Toronto's live ArcGIS and OpenStreetMap APIs, and produces an interactive map, GeoJSON, and KML — no GIS expertise required.
+GeoScribe takes that sentence, queries live GIS APIs, and produces an interactive map, GeoJSON, and KML — no GIS expertise required.
+
+**Works in Toronto and beyond.** Toronto communities use the city's ArcGIS REST API for high-precision road centrelines and zoning data. Communities outside Toronto (anywhere with OpenStreetMap coverage) use the Overpass API for road and waterway geometry.
 
 ## Usage
 
@@ -14,18 +16,23 @@ GeoScribe takes that sentence, queries Toronto's live ArcGIS and OpenStreetMap A
 pip install -r requirements.txt
 
 cd scripts
+
+# Toronto community (uses ArcGIS — fast, ~10s)
 python community_polygon.py ../examples/thompson_orchard.json --approach both
+
+# Non-Toronto community (uses OpenStreetMap — ~60s due to API throttling)
+python community_polygon.py ../examples/north_richvale.json --approach lines
 ```
 
 Three files appear in `output/`:
 
 | File | What you get |
-|------|-------------|
-| `thompson_orchard_*.html` | Interactive Leaflet map — open in any browser |
-| `thompson_orchard_*.geojson` | Standard GeoJSON polygon |
-| `thompson_orchard_*.kml` | Google Earth / Google My Maps format |
+| ---- | ----------- |
+| `*.html` | Interactive Leaflet map — open in any browser |
+| `*.geojson` | Standard GeoJSON polygon |
+| `*.kml` | Google Earth / Google My Maps format |
 
-Or skip straight to the pre-generated output: open `examples/sample_output/thompson_orchard.html` in a browser.
+Pre-generated outputs for both examples are in `examples/sample_output/`.
 
 ### 2. Describe your community
 
@@ -66,7 +73,7 @@ Either way, save the result as a `.json` file in `examples/`.
 | `boundaries[].feature_name` | Yes | Everyday name — "Bloor", "Royal York", "Mimico Creek". GeoScribe resolves to GIS names. |
 | `boundaries[].feature_type` | Yes | `street`, `waterway`, or `railway` |
 | `boundaries[].compass_direction` | Yes | Which side of the community this boundary sits on (see pitfalls below) |
-| `boundaries[].gis_hint` | No | Official Toronto GIS road name (e.g., "Royal York Rd"). Speeds up name resolution. |
+| `boundaries[].gis_hint` | No | Official road name (e.g., "Royal York Rd"). Speeds up name resolution. For non-Toronto areas, used directly as the Overpass query name. |
 | `zoning_exception` | No | Enables Approach B (zoning parcel union) |
 
 *One of `address` or `lat/lon` required.
@@ -94,7 +101,7 @@ Either way, save the result as a `.json` file in `examples/`.
 **KML** — open in any of these:
 
 | Tool | How to load |
-|------|------------|
+| ---- | ---------- |
 | [Google Earth Web](https://earth.google.com/web) | Menu (top-left) → Projects → New project → Import KML file |
 | [Google My Maps](https://www.google.com/mymaps) | Create a new map → Import → upload the `.kml` |
 | [geojson.io](https://geojson.io) | Drag and drop the `.kml` or `.geojson` onto the map |
@@ -123,7 +130,7 @@ python boundary_check.py "9 Ashton Manor, Etobicoke, ON" --exception 42
 **Which `--approach` should I use?**
 
 | Flag | When to use it | What happens |
-|------|---------------|--------------|
+| ---- | ------------- | ------------ |
 | *(no flag)* | **Most of the time.** Your JSON has both boundaries and a `zoning_exception`. | Runs both approaches, overlays them, shows an IoU agreement score. This is the default. |
 | `--approach lines` | Your JSON has **no** `zoning_exception`, OR you're iterating on boundary accuracy. | Traces road/waterway geometry only. This is what most communities will use (not every area has a unique zoning exception). |
 | `--approach zoning` | You **only** want the zoning parcel union and don't care about road-tracing. | Faster — skips all geometry work. Only works if your JSON has a `zoning_exception`. |
@@ -156,11 +163,12 @@ GeoScribe builds polygons two independent ways:
 
 ### Approach A: Boundary Lines → Polygon
 
-1. **Resolve names** — maps everyday names to GIS names (e.g., "Bloor" → "The Kingsway") using exact match, fuzzy LIKE query, or intersection-based lookup
-2. **Fetch geometry** — road centrelines and waterways from ArcGIS; falls back to OpenStreetMap for sparse waterway data
-3. **Filter by compass** — keeps only segments consistent with each boundary's direction relative to the community centre
-4. **Find corners** — multi-strategy pipeline: geocode intersection (Google + Nominatim) with geometry snapping validation → geometric intersection → line extrapolation → nearest points fallback
-5. **Clip & assemble** — extracts each boundary between its corners using linear referencing, detects and straightens detour segments, assembles into a closed polygon ring
+1. **Resolve names** — maps everyday names to GIS names (e.g., "Bloor" → "The Kingsway") using exact match, fuzzy LIKE query, or intersection-based lookup. Non-Toronto areas skip this step and use `gis_hint` names directly.
+2. **Fetch geometry** — Toronto: road centrelines from ArcGIS, waterways from ArcGIS with OpenStreetMap fallback. Non-Toronto: all geometry from OpenStreetMap via Overpass API (with automatic 12s throttle between requests).
+3. **Merge segments** — linemerge joins connected segments. When OSM data fragments badly (divided roads with offset intersection nodes), a spatial chaining fallback sorts and concatenates segments along the road direction.
+4. **Filter by compass** — keeps only segments consistent with each boundary's direction relative to the community centre
+5. **Find corners** — multi-strategy pipeline: geocode intersection (Google + Nominatim) with geometry snapping validation → geometric intersection → line extrapolation → nearest points fallback
+6. **Clip & assemble** — extracts each boundary between its corners using linear referencing, detects and straightens detour segments, assembles into a closed polygon ring
 
 ### Approach B: Zoning Exception Union
 
@@ -184,15 +192,15 @@ For a full explanation of Toronto zoning (FSI, setbacks, GFA, how to read the by
 
 ## Architecture
 
-```
+```text
 GeoScribe/
 ├── examples/
-│   ├── thompson_orchard.json       Sample boundary description (input)
+│   ├── thompson_orchard.json       Toronto example (input)
+│   ├── north_richvale.json         Non-Toronto example (input)
 │   ├── ThompsonOrchard.png         Reference map for validation
 │   └── sample_output/              Pre-generated outputs
-│       ├── thompson_orchard.html
-│       ├── thompson_orchard.geojson
-│       ├── thompson_orchard.kml
+│       ├── thompson_orchard.{html,geojson,kml}
+│       ├── north_richvale.{html,geojson,kml}
 │       ├── validation_9_ashton_manor.md
 │       └── validation_9_ashton_manor.json
 ├── scripts/
@@ -209,12 +217,14 @@ GeoScribe/
 
 ### Data Sources
 
-| Source | What It Provides | API Key |
-| --- | --- | --- |
-| Toronto ArcGIS REST API | Road centrelines, waterlines, zoning parcels, property boundaries | None |
-| Overpass API (OpenStreetMap) | Waterway fallback when ArcGIS data is sparse | None |
-| Nominatim | Free geocoding (default) | None |
-| Google Maps Geocoding | Higher-accuracy intersection geocoding | Optional: `GOOGLE_MAPS_API_KEY` env var |
+| Source | What It Provides | Used When | API Key |
+| --- | --- | --- | --- |
+| Toronto ArcGIS REST API | Road centrelines, waterlines, zoning parcels, property boundaries | Toronto communities | None |
+| Overpass API (OpenStreetMap) | Road and waterway geometry | Non-Toronto communities; Toronto waterway fallback | None |
+| Nominatim | Free geocoding (default) | All communities | None |
+| Google Maps Geocoding | Higher-accuracy intersection geocoding | All communities (optional) | `GOOGLE_MAPS_API_KEY` env var |
+
+**Overpass API throttling:** The Overpass API enforces per-IP rate limits. GeoScribe automatically waits 12 seconds between requests. A non-Toronto community with 4 street boundaries takes ~60 seconds due to this throttle.
 
 ## Configuration
 
@@ -245,12 +255,36 @@ cd scripts && python community_polygon.py ../examples/your_community.json --appr
 **Step 4: Review and iterate.**
 Open the HTML map. If a boundary looks wrong, check: is the compass direction correct? Is the reference point inside the polygon? Are boundaries in perimeter order? Adjust the JSON and re-run.
 
+## Toronto vs. Non-Toronto Behavior
+
+| | Toronto | Outside Toronto |
+| --- | --- | --- |
+| **Road data** | ArcGIS centrelines (fast, single request per road) | OpenStreetMap via Overpass (12s throttle between requests) |
+| **Waterways** | ArcGIS with OSM fallback | OpenStreetMap via Overpass |
+| **Name resolution** | Multi-strategy pipeline (exact, fuzzy, intersection-based) | Uses `gis_hint` directly as Overpass query |
+| **Zoning (Approach B)** | Available (Toronto zoning layer) | Not available |
+| **Typical run time** | ~10 seconds | ~60 seconds (4 boundaries) |
+| **Detection** | Automatic — based on whether reference point falls within Toronto's ArcGIS coverage | |
+
 ## Known Limitations
 
-- **Toronto-specific**: Currently configured for Toronto's ArcGIS REST API. Adapting to other cities requires updating `config.py` endpoints and road name normalization.
-- **ArcGIS road centreline gaps**: 100-1500m gaps at intersections, especially at bridges/underpasses. The geocode+snap pipeline handles most cases, but complex road geometries (ravines, highway interchanges) may need manual reference point tuning.
+- **ArcGIS road centreline gaps** (Toronto): 100-1500m gaps at intersections, especially at bridges/underpasses. The geocode+snap pipeline handles most cases, but complex road geometries (ravines, highway interchanges) may need manual reference point tuning.
+- **OSM divided road zigzag** (non-Toronto): Divided roads (e.g., 4-lane arterials) have separate geometry for each direction. The spatial chaining merge produces a small zigzag (~15m) at the polygon edge. Acceptable for neighbourhood-scale polygons.
+- **Road name changes**: Some roads change name mid-block (e.g., "Rutherford Rd" becomes "Carrville Rd" east of Bathurst). Use the name that applies along the community's boundary segment, not the name at the far end of the road.
 - **Sparse waterway data**: ArcGIS waterline layer can be thin. GeoScribe automatically falls back to OpenStreetMap when ArcGIS returns less than 200m of geometry.
-- **Curving boundary roads**: When a road curves significantly between corners (detour ratio >2.5x), GeoScribe tries to fetch the actual road geometry from OpenStreetMap within a corridor between the corners. This usually produces a road-following edge. Falls back to a straight line only when no suitable road geometry is found.
+- **Curving boundary roads**: When a road curves significantly between corners (detour ratio >2.5x), GeoScribe tries to fetch the actual road geometry from OpenStreetMap within a corridor between the corners. Falls back to a straight line only when no suitable road geometry is found.
+
+## Glossary
+
+| Term | What it is |
+| --- | --- |
+| **ArcGIS** | [Esri's](https://www.esri.com/) geographic information system platform. Toronto publishes road centrelines, waterways, and zoning parcels through an [ArcGIS REST API](https://developers.arcgis.com/rest/) that GeoScribe queries directly -- no API key required. |
+| **GeoJSON** | An [open standard](https://geojson.org/) for encoding geographic features (points, lines, polygons) in JSON. Works with virtually every mapping tool. |
+| **GIS** | Geographic Information System -- software and data for capturing, storing, and analyzing spatial information. |
+| **KML** | [Keyhole Markup Language](https://developers.google.com/kml) -- an XML format for geographic data, used by Google Earth and Google My Maps. |
+| **Nominatim** | [OpenStreetMap's free geocoding service](https://nominatim.openstreetmap.org/). Converts addresses and intersection names to coordinates. GeoScribe's default geocoder. |
+| **OSM** | [OpenStreetMap](https://www.openstreetmap.org/) -- a collaborative, open-data map of the world. GeoScribe uses OSM data via the Overpass API for areas outside Toronto and as a fallback for Toronto waterways. |
+| **Overpass API** | A [read-only API](https://wiki.openstreetmap.org/wiki/Overpass_API) for querying OpenStreetMap data by location and feature type. Free, no API key, but rate-limited per IP. |
 
 ## Dependencies
 

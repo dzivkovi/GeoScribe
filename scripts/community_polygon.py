@@ -363,6 +363,22 @@ OVERPASS_ENDPOINTS = [
     "https://overpass.kumi.systems/api/interpreter",
 ]
 
+# Module-level Overpass throttle to respect API rate limits
+_last_overpass_time = 0
+
+
+def _overpass_throttle():
+    """Wait if needed to respect Overpass API rate limits (~12s between requests)."""
+    global _last_overpass_time
+    import time
+    now = time.time()
+    elapsed = now - _last_overpass_time
+    if elapsed < 12:
+        wait = 12 - elapsed
+        print(f"    (Overpass throttle: waiting {wait:.0f}s...)")
+        time.sleep(wait)
+    _last_overpass_time = time.time()
+
 
 def fetch_waterline_overpass(waterline_name, ref_lat, ref_lon, radius=0.02):
     """
@@ -374,6 +390,7 @@ def fetch_waterline_overpass(waterline_name, ref_lat, ref_lon, radius=0.02):
     """
     import requests
     import time
+    _overpass_throttle()
 
     bbox = f"{ref_lat - radius},{ref_lon - radius},{ref_lat + radius},{ref_lon + radius}"
     query = f"""[out:json][timeout:60];
@@ -404,6 +421,64 @@ out geom;"""
     raise last_error or ValueError("All Overpass endpoints failed")
 
 
+def fetch_road_overpass(road_name, ref_lat, ref_lon, radius=0.02):
+    """
+    Fetch road geometry from OpenStreetMap via the Overpass API.
+    Used as fallback when ArcGIS road data is not available (non-Toronto areas).
+
+    Uses case-insensitive regex so colloquial names like "Major MacKenzie"
+    match full OSM names like "Major Mackenzie Drive West".
+
+    Groups results by OSM road name and returns only the road with the most
+    total geometry. This filters out unrelated roads that match the regex
+    (e.g. "North Yonge Boulevard" when searching for "Yonge").
+    """
+    import requests
+    import time
+    _overpass_throttle()
+
+    bbox = f"{ref_lat - radius},{ref_lon - radius},{ref_lat + radius},{ref_lon + radius}"
+    query = f"""[out:json][timeout:60];
+(
+  way["name"~"{road_name}",i]["highway"]({bbox});
+);
+out geom;"""
+
+    last_error = None
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            resp = requests.get(endpoint, params={"data": query}, timeout=45)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Group segments by exact OSM road name
+            roads = {}  # name -> [LineStrings]
+            for element in data.get("elements", []):
+                if element.get("type") == "way" and "geometry" in element:
+                    coords = [(pt["lon"], pt["lat"]) for pt in element["geometry"]]
+                    osm_name = element.get("tags", {}).get("name", "")
+                    if len(coords) >= 2:
+                        roads.setdefault(osm_name, []).append(LineString(coords))
+
+            if not roads:
+                return []
+
+            # Pick the road with the most total geometry — the actual
+            # boundary road has more segments than a short side street
+            best_name = max(roads.keys(),
+                            key=lambda n: sum(l.length for l in roads[n]))
+            print(f"    OSM: picked '{best_name}' "
+                  f"({len(roads[best_name])} segments from "
+                  f"{len(roads)} road names)")
+            return roads[best_name]
+        except Exception as e:
+            last_error = e
+            print(f"    Overpass endpoint {endpoint.split('/')[2]} failed: {e}")
+            time.sleep(2)
+
+    raise last_error or ValueError("All Overpass endpoints failed")
+
+
 def fetch_corridor_road_osm(corridor_poly, ref_lat, ref_lon):
     """
     Fetch the boundary road within a corridor polygon (name-free).
@@ -417,6 +492,7 @@ def fetch_corridor_road_osm(corridor_poly, ref_lat, ref_lon):
     """
     import requests
     import time
+    _overpass_throttle()
 
     bounds = corridor_poly.bounds  # (minx, miny, maxx, maxy)
     bbox = f"{bounds[1]},{bounds[0]},{bounds[3]},{bounds[2]}"
@@ -496,7 +572,27 @@ def fetch_boundary_geometry(boundary, ref_lat, ref_lon, search_radius=0.015):
     fname = boundary["feature_name"]
 
     if ftype == "street":
-        return fetch_road_linestrings(fname, ref_lat, ref_lon, radius=search_radius)
+        # Try ArcGIS first
+        try:
+            return fetch_road_linestrings(fname, ref_lat, ref_lon, radius=search_radius)
+        except ValueError:
+            pass
+
+        # Fallback: OpenStreetMap via Overpass API
+        print(f"    ArcGIS has no data for '{fname}'. Trying Overpass API...")
+        try:
+            osm_lines = fetch_road_overpass(fname, ref_lat, ref_lon,
+                                            radius=search_radius + 0.01)
+            if osm_lines:
+                osm_length = sum(l.length for l in osm_lines) * 111320
+                print(f"    Overpass returned {len(osm_lines)} segments, "
+                      f"~{osm_length:.0f}m")
+                return osm_lines
+        except Exception as e:
+            print(f"    Overpass fallback failed: {e}")
+
+        raise ValueError(f"No road segments found for: {fname} "
+                         f"(ArcGIS + Overpass)")
     elif ftype == "waterway":
         # Try ArcGIS first
         try:
@@ -561,6 +657,52 @@ def _apply_corridor_clip(clipped, prev_corner, next_corner, boundary,
     return True
 
 
+def _chain_segments_spatially(linestrings, compass_direction):
+    """
+    Chain line segments spatially when linemerge produces too many fragments.
+
+    OSM data has gaps at intersection nodes (10-22m) where divided road lanes
+    have separate nodes. linemerge requires exact endpoint matches and fails.
+    This fallback sorts segments along the road direction and concatenates
+    them, bridging the gaps.
+
+    For divided roads, segments from both directions get interleaved, creating
+    a small zigzag (~15m oscillation) that's acceptable for polygon construction.
+    """
+    if not linestrings:
+        return None
+    if len(linestrings) == 1:
+        return linestrings[0]
+
+    # Determine sort axis from compass direction
+    # North/south boundaries run east-west -> sort by centroid longitude (x)
+    # East/west boundaries run north-south -> sort by centroid latitude (y)
+    sort_by_x = compass_direction in ("north", "south")
+    if not sort_by_x and compass_direction not in ("east", "west"):
+        # Compound directions: check which axis dominates
+        sort_by_x = "north" in compass_direction or "south" in compass_direction
+
+    if sort_by_x:
+        sorted_segs = sorted(linestrings, key=lambda ls: ls.centroid.x)
+    else:
+        sorted_segs = sorted(linestrings, key=lambda ls: ls.centroid.y)
+
+    # Chain: append each segment in the correct orientation
+    chain_coords = list(sorted_segs[0].coords)
+    for seg in sorted_segs[1:]:
+        seg_coords = list(seg.coords)
+        chain_end = chain_coords[-1]
+        d_start = ((chain_end[0] - seg_coords[0][0])**2 +
+                   (chain_end[1] - seg_coords[0][1])**2)**0.5
+        d_end = ((chain_end[0] - seg_coords[-1][0])**2 +
+                 (chain_end[1] - seg_coords[-1][1])**2)**0.5
+        if d_end < d_start:
+            seg_coords = list(reversed(seg_coords))
+        chain_coords.extend(seg_coords)
+
+    return LineString(chain_coords)
+
+
 def _merge_and_select(linestrings, clip_box=None, compass_direction=None,
                       ref_lat=None, ref_lon=None):
     """
@@ -579,6 +721,9 @@ def _merge_and_select(linestrings, clip_box=None, compass_direction=None,
     if not linestrings:
         return None
 
+    total_raw = sum(ls.length for ls in linestrings) * 111320
+    print(f"      [merge] input: {len(linestrings)} segments, ~{total_raw:.0f}m")
+
     # Clip to bounding box if provided
     if clip_box:
         clipped = []
@@ -590,31 +735,63 @@ def _merge_and_select(linestrings, clip_box=None, compass_direction=None,
                 elif intersection.geom_type == "MultiLineString":
                     clipped.extend(intersection.geoms)
         linestrings = clipped if clipped else linestrings
+        total_clip = sum(ls.length for ls in linestrings) * 111320
+        print(f"      [merge] after clip_box: {len(linestrings)} segments, ~{total_clip:.0f}m")
 
     # Filter by compass direction — discard segments on the wrong side
     if compass_direction and ref_lat is not None and ref_lon is not None:
         filtered = _filter_by_compass(linestrings, ref_lat, ref_lon,
                                       compass_direction)
         if filtered:
+            total_compass = sum(ls.length for ls in filtered) * 111320
+            print(f"      [merge] after compass({compass_direction}): "
+                  f"{len(filtered)} segments, ~{total_compass:.0f}m")
             linestrings = filtered
+        else:
+            print(f"      [merge] compass({compass_direction}): ALL filtered out, keeping original")
 
     # Merge connected segments
     merged = linemerge(MultiLineString(linestrings))
 
     # If MultiLineString, select the most relevant component:
-    # the longest one within 2km of the reference point.
+    # the longest one within max_dist of the reference point.
     # This drops disconnected far-away segments of the same-named road.
     if (merged.geom_type == "MultiLineString"
             and ref_lat is not None and ref_lon is not None):
         ref = Point(ref_lon, ref_lat)
+        # Use clip_box diagonal as max distance (adapts to community size)
+        if clip_box:
+            bx = clip_box.bounds
+            max_dist = max(bx[2] - bx[0], bx[3] - bx[1]) * 111320
+        else:
+            max_dist = 2000
         candidates = [(g, g.length, g.distance(ref) * 111320)
                       for g in merged.geoms]
-        nearby = [(g, length) for g, length, dist in candidates if dist < 2000]
-        if nearby:
-            merged = max(nearby, key=lambda x: x[1])[0]
+        total_merged = sum(g.length for g in merged.geoms)
+        max_component = max(g.length for g in merged.geoms)
+
+        print(f"      [merge] after linemerge: {len(candidates)} components, "
+              f"max_dist={max_dist:.0f}m")
+        # Show top 5 components by length
+        by_len = sorted(candidates, key=lambda x: x[1], reverse=True)[:5]
+        for g, length, dist in by_len:
+            print(f"        ~{length * 111320:.0f}m, dist={dist:.0f}m")
+
+        # If linemerge is badly fragmented (longest < 40% of total),
+        # fall back to spatial chaining — common with OSM data where
+        # intersection nodes don't share exact coordinates
+        if max_component < total_merged * 0.4 and compass_direction:
+            print(f"      [merge] fragmented ({max_component/total_merged:.0%} "
+                  f"in longest) — using spatial chain")
+            merged = _chain_segments_spatially(linestrings, compass_direction)
         else:
-            # All far away — take the closest
-            merged = min(candidates, key=lambda x: x[2])[0]
+            nearby = [(g, length) for g, length, dist in candidates
+                      if dist < max_dist]
+            if nearby:
+                merged = max(nearby, key=lambda x: x[1])[0]
+            else:
+                # All far away — take the closest
+                merged = min(candidates, key=lambda x: x[2])[0]
 
     return merged
 
@@ -628,7 +805,7 @@ def _filter_by_compass(linestrings, ref_lat, ref_lon, compass_direction):
     reference point. Uses a small margin to avoid cutting segments that
     straddle the boundary.
     """
-    margin = 0.001  # ~111m margin
+    margin = 0.003  # ~330m margin
 
     kept = []
     for ls in linestrings:
@@ -708,7 +885,7 @@ def _geocode_intersection_all(road_a, road_b, city="Toronto, ON"):
     return unique
 
 
-def _find_corner(boundary_i, boundary_j, line_i, line_j):
+def _find_corner(boundary_i, boundary_j, line_i, line_j, city="Toronto, ON"):
     """
     Find the corner point between two adjacent boundaries.
 
@@ -741,7 +918,7 @@ def _find_corner(boundary_i, boundary_j, line_i, line_j):
     name_groups.append(("resolved", name_i, name_j))
 
     for group_label, gi, gj in name_groups:
-        points = _geocode_intersection_all(gi, gj)
+        points = _geocode_intersection_all(gi, gj, city=city)
 
         for pt in points:
             snap_i = line_i.interpolate(line_i.project(pt))
@@ -952,7 +1129,7 @@ def _get_endpoints(line):
 # Boundary name resolution (pre-pass)
 # ---------------------------------------------------------------------------
 
-def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon):
+def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon, city="Toronto, ON"):
     """
     Resolve all boundary names to exact GIS field values.
 
@@ -1030,7 +1207,15 @@ def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon):
                 b["_resolved"] = False
 
     # Pass 2: Intersection-based resolution for unresolved boundaries
+    # Skip if no boundaries resolved at all (non-Toronto area — ArcGIS has no data)
+    any_resolved = any(b.get("_resolved") for b in resolved)
+    if not any_resolved:
+        print("    No boundaries found in ArcGIS -- using original names "
+              "(will try Overpass API for geometry)")
+
     for i in range(n):
+        if not any_resolved:
+            break
         if resolved[i].get("_resolved"):
             continue
 
@@ -1046,7 +1231,7 @@ def _resolve_all_boundary_names(boundaries, ref_lat, ref_lon):
             j = (i + di) % n
             adj_name = resolved[j]["feature_name"]
 
-            pts = _geocode_intersection_all(approx, adj_name)
+            pts = _geocode_intersection_all(approx, adj_name, city=city)
             if not pts:
                 continue
             pt = pts[0]  # Use first result
@@ -1131,33 +1316,56 @@ def construct_from_boundaries(description, ref_lat, ref_lon):
     boundaries = description["boundaries"]
     reference_point = Point(ref_lon, ref_lat)
 
+    # Extract city from reference address for geocoding outside Toronto
+    ref_address = description.get("reference_point", {}).get("address", "")
+    city = ", ".join(p.strip() for p in ref_address.split(",")[1:]) or "Toronto, ON"
+
     print("\n  [Approach A: Boundary Lines -> Polygon]")
 
     # Pre-resolve boundary names to exact GIS field values
-    boundaries = _resolve_all_boundary_names(boundaries, ref_lat, ref_lon)
+    boundaries = _resolve_all_boundary_names(boundaries, ref_lat, ref_lon, city=city)
 
-    # Create a working bounding box (generous: 2km radius)
-    work_box = box(ref_lon - 0.02, ref_lat - 0.02, ref_lon + 0.02, ref_lat + 0.02)
-
-    # Fetch and merge geometries
-    merged_lines = []
-    viz_lines = []
+    # Pass 1: Fetch all boundary geometries
+    raw_lines = []
     for b in boundaries:
         print(f"  Fetching {b['feature_type']}: {b['feature_name']}...")
         try:
-            linestrings = fetch_boundary_geometry(b, ref_lat, ref_lon, search_radius=0.02)
+            linestrings = fetch_boundary_geometry(b, ref_lat, ref_lon,
+                                                  search_radius=0.03)
             print(f"    Got {len(linestrings)} segments")
-            merged = _merge_and_select(linestrings, clip_box=work_box,
-                                      compass_direction=b.get("compass_direction"),
-                                      ref_lat=ref_lat, ref_lon=ref_lon)
-            total_length_m = merged.length * 111320 if merged else 0
-            print(f"    Merged: {merged.geom_type}, ~{total_length_m:.0f}m")
-            merged_lines.append(merged)
-            viz_lines.append((merged, b))
+            raw_lines.append(linestrings)
         except Exception as e:
             print(f"    WARNING: {e}")
+            raw_lines.append(None)
+
+    # Compute work_box from actual geometry bounds (data-driven)
+    all_segments = [ls for group in raw_lines if group for ls in group]
+    if all_segments:
+        all_geom = MultiLineString(all_segments)
+        bx = all_geom.bounds  # (minx, miny, maxx, maxy)
+        padding = 0.005  # ~550m
+        work_box = box(bx[0] - padding, bx[1] - padding,
+                       bx[2] + padding, bx[3] + padding)
+    else:
+        work_box = box(ref_lon - 0.02, ref_lat - 0.02,
+                       ref_lon + 0.02, ref_lat + 0.02)
+
+    # Pass 2: Merge with data-driven clip
+    merged_lines = []
+    viz_lines = []
+    for i, b in enumerate(boundaries):
+        if raw_lines[i] is None:
             merged_lines.append(None)
             viz_lines.append(None)
+            continue
+        merged = _merge_and_select(raw_lines[i], clip_box=work_box,
+                                   compass_direction=b.get("compass_direction"),
+                                   ref_lat=ref_lat, ref_lon=ref_lon)
+        total_length_m = merged.length * 111320 if merged else 0
+        print(f"    {b['feature_name']}: merged {merged.geom_type}, "
+              f"~{total_length_m:.0f}m")
+        merged_lines.append(merged)
+        viz_lines.append((merged, b))
 
     # Check which boundaries have usable geometry
     usable = [(i, ml) for i, ml in enumerate(merged_lines) if ml is not None and ml.length > 0.0001]
@@ -1187,7 +1395,7 @@ def construct_from_boundaries(description, ref_lat, ref_lon):
             continue
 
         corner, dist_m, method = _find_corner(
-            boundaries[i], boundaries[j], line_i, line_j
+            boundaries[i], boundaries[j], line_i, line_j, city=city
         )
 
         if corner:
